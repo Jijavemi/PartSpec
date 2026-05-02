@@ -103,7 +103,7 @@ async def get_llm_specs(query: str) -> PartSpec:
 # ---------- API endpoints ----------
 @app.get("/version")
 def version():
-    return {"version": "3.0", "status": "New Groq code deployed"}
+    return {"version": "4.0", "status": "Using get_llm_specs conversion"}
 
 @app.get("/debug")
 def debug():
@@ -117,22 +117,4 @@ def health():
 async def search_part(q: str = Query(...)):
     if not groq_available:
         return mock_part(q)
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You are a technical assistant. Return valid JSON with fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications. Use null for unknown."},
-                {"role": "user", "content": f"Part: {q}"}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.2
-        )
-        data = json.loads(response.choices[0].message.content)
-        return PartSpec(**data)
-    except Exception as e:
-        # Return the error as a PartSpec so you can see it in curl
-        return PartSpec(
-            name=f"Groq error: {type(e).__name__}",
-            description=str(e),
-            category="Error"
-        )
+    return await get_llm_specs(q)   # ← Uses the function with conversion

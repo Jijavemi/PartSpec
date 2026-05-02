@@ -85,6 +85,10 @@ async def get_llm_specs(query: str) -> PartSpec:
 def version():
     return {"version": "3.0", "status": "New Groq code deployed"}
 
+@app.get("/debug")
+def debug():
+    return {"groq_available": groq_available, "api_key_set": bool(os.getenv("GROQ_API_KEY"))}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}

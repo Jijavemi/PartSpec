@@ -1,40 +1,26 @@
 import os
 import sys
 import json
+import asyncio
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from dotenv import load_dotenv
+from groq import Groq
+import httpx
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"])
 
-# ---------- Debug logging ----------
-print("🐍 Python version:", sys.version)
-api_key = os.getenv("GROQ_API_KEY")
-print(f"🔑 GROQ_API_KEY present: {'Yes' if api_key else 'No'}")
-if api_key:
-    print(f"   First 5 chars: {api_key[:5]}... (length {len(api_key)})")
-else:
-    print("   (Make sure it's set in Render Environment Variables)")
-
-# ---------- Groq initialisation ----------
-groq_available = False
-groq_client = None
-
-if api_key:
-    try:
-        from groq import Groq
-        groq_client = Groq(api_key=api_key)
-        groq_available = True
-        print("✅ Groq client initialised successfully")
-    except Exception as e:
-        print(f"❌ Groq init error: {type(e).__name__}: {e}")
-else:
-    print("⚠️ GROQ_API_KEY not set – using mock responses only")
+# ---------- Groq init ----------
+groq_api_key = os.getenv("GROQ_API_KEY")
+if not groq_api_key:
+    raise ValueError("Missing GROQ_API_KEY")
+groq_client = Groq(api_key=groq_api_key)
 
 # ---------- Data model ----------
 class PartSpec(BaseModel):
@@ -53,68 +39,84 @@ class PartSpec(BaseModel):
     datasheetURL: Optional[str] = None
     certifications: Optional[List[str]] = None
 
-# ---------- Mock fallback (updated text) ----------
-def mock_part(query: str) -> PartSpec:
-    return PartSpec(
-        name=f"Mock for '{query}' (Groq not available – check logs)",
-        description="Either GROQ_API_KEY missing or Groq call failed. See Render logs for details.",
-        category="Other"
-    )
+# ---------- Web search (stable, async) ----------
+async def duckduckgo_search(query: str, max_results: int = 3) -> str:
+    """Search DuckDuckGo and return formatted results."""
+    url = "https://html.duckduckgo.com/html/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    params = {"q": query}
+    
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        try:
+            resp = await client.get(url, headers=headers, params=params)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"Search request failed: {e}")
+            return ""
+    
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results = soup.select(".result")
+    
+    output = []
+    for r in results[:max_results]:
+        title_tag = r.select_one(".result__a")
+        snippet_tag = r.select_one(".result__snippet")
+        if title_tag:
+            title = title_tag.get_text(strip=True)
+            link = title_tag.get("href")
+            snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
+            output.append(f"Title: {title}\nSnippet: {snippet}\nURL: {link}\n")
+    return "\n".join(output) if output else ""
 
-# ---------- LLM call ----------
-async def get_llm_specs(query: str) -> PartSpec:
-    system = """You are PartSpec, a technical assistant. Return ONLY valid JSON with these fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications. 
-    IMPORTANT: weight, dimensions, and price must be strings (e.g., "0.5 kg", "10 x 5 x 2 cm", "$25.99"). Do not use numbers or objects."""
+# ---------- LLM call with search context ----------
+async def get_part_specs(query: str) -> PartSpec:
+    # 1. Search web
+    search_context = await duckduckgo_search(query)
+    
+    system_prompt = """You are PartSpec, a technical assistant. Use the search results below to answer.
+    Return ONLY valid JSON with these fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications.
+    If the search results do not contain a clear answer for the exact part, set name = "Part not found" and description = "No reliable information found for this part number."
+    Never invent specifications. All values must be based on the provided search results."""
+    
+    user_prompt = f"""User query: "{query}"
+
+Search results:
+{search_context if search_context else "No web search results available."}
+
+Return JSON part specs."""
     
     try:
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": f"Part: {query}"}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
             response_format={"type": "json_object"},
             temperature=0.2
         )
         data = json.loads(response.choices[0].message.content)
-        
-        # Convert any non-string values to strings (safety net)
-        for key in ["weight", "dimensions", "price", "partNumber", "material", "tolerance", "finish", "manufacturer", "stockStatus", "datasheetURL"]:
-            if key in data and data[key] is not None and not isinstance(data[key], str):
-                data[key] = str(data[key])
-        
-        # Convert certifications list if present
-        if "certifications" in data and data["certifications"] is not None:
-            if not isinstance(data["certifications"], list):
-                data["certifications"] = [str(data["certifications"])]
-            else:
-                data["certifications"] = [str(c) for c in data["certifications"]]
-        
+        # Convert any non‑string values (safety)
+        string_fields = ["partNumber", "name", "description", "category", "material", "weight", "dimensions", "tolerance", "finish", "manufacturer", "price", "stockStatus", "datasheetURL"]
+        for field in string_fields:
+            if field in data and data[field] is not None and not isinstance(data[field], str):
+                data[field] = str(data[field])
         return PartSpec(**data)
     except Exception as e:
-        print(f"❌ LLM error: {type(e).__name__}: {e}")
-        # Return a fallback that includes the error details (optional)
+        print(f"LLM error: {e}")
         return PartSpec(
-            name=f"Fallback for '{query}'",
-            description=f"Groq error: {str(e)}",
+            name="Service error",
+            description=f"Unable to process request: {str(e)}",
             category="Error"
         )
 
 # ---------- API endpoints ----------
-@app.get("/version")
-def version():
-    return {"version": "4.0", "status": "Using get_llm_specs conversion"}
-
-@app.get("/debug")
-def debug():
-    return {"groq_available": groq_available, "api_key_set": bool(os.getenv("GROQ_API_KEY"))}
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 @app.get("/search")
 async def search_part(q: str = Query(...)):
-    if not groq_available:
-        return mock_part(q)
-    return await get_llm_specs(q)   # ← Uses the function with conversion
+    return await get_part_specs(q)

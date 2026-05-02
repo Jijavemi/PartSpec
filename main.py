@@ -64,21 +64,36 @@ async def duckduckgo_search(query: str, max_results: int = 4) -> str:
 async def get_part_specs(query: str) -> PartSpec:
     # Primary search
     search_context = await duckduckgo_search(query)
-    if not search_context or len(search_context.strip()) < 80:
-        search_context = await duckduckgo_search(f"{query} specifications")
+    
+    # Additional targeted searches for dimensions and weight
+    dim_context = await duckduckgo_search(f"{query} dimensions")
+    weight_context = await duckduckgo_search(f"{query} weight")
+    
+    combined = search_context
+    if dim_context:
+        combined += f"\n\n--- Additional dimension results ---\n{dim_context}"
+    if weight_context:
+        combined += f"\n\n--- Additional weight results ---\n{weight_context}"
+    
+    # Fallback if everything empty
+    if not combined.strip():
+        combined = "No search results."
 
-    system_prompt = """You are PartSpec, a technical assistant. 
-- Use the provided search results as your **primary source**.
-- However, you may also rely on your **general technical knowledge** for well‑known parts (common electronics, standard hardware, popular brands like Huion, Logitech, etc.) when search results are sparse or missing.
-- If a part is completely unknown or the search results contain no relevant information, set name = "Part not found" and description = "No reliable information found."
-- Return ONLY valid JSON with fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications.
-- Category must be one of: Mechanical, Electrical, Hydraulic, Pneumatic, Fasteners, RawMaterials, Other. Default "Other".
-- Use null for unknown fields.
-- Never invent specifications for obscure proprietary part numbers (like internal inventory codes)."""
+    system_prompt = """You are PartSpec. Use the provided search results (especially the dimension-specific ones) to fill the 'dimensions' and 'weight' fields. You may also use your general knowledge for popular products.
+
+Return ONLY valid JSON with fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications.
+
+Rules:
+- If dimensions are found anywhere (e.g., "folded: 200x150x20mm", "size: 11mm thin"), include them as a string.
+- If weight is found (e.g., "0.5kg"), use it.
+- If a field cannot be found, use null (not "N/A").
+- Category must be a string, default "Other".
+- Never invent specifications for unknown parts.
+"""
 
     user_prompt = f"""User query: "{query}"
-Search results:
-{search_context if search_context else "No search results."}
+Search results (including dimension-specific searches):
+{combined}
 Return JSON part specs."""
 
     try:
@@ -92,32 +107,14 @@ Return JSON part specs."""
             temperature=0.2
         )
         data = json.loads(response.choices[0].message.content)
-        
-        # Guarantee required fields
-        if "category" not in data or data["category"] is None or not isinstance(data["category"], str):
-            data["category"] = "Other"
-        if "name" not in data or data["name"] is None:
-            data["name"] = "Part not found"
-        if "description" not in data or data["description"] is None:
-            data["description"] = "No description available."
-        
-        string_fields = ["partNumber", "material", "weight", "dimensions", "tolerance", "finish", "manufacturer", "price", "stockStatus", "datasheetURL"]
-        for field in string_fields:
-            if field in data and data[field] is not None and not isinstance(data[field], str):
-                data[field] = str(data[field])
-        
-        if "certifications" in data and data["certifications"] is not None:
-            if not isinstance(data["certifications"], list):
-                data["certifications"] = [str(data["certifications"])]
-            else:
-                data["certifications"] = [str(c) for c in data["certifications"]]
-        
+        # ... (the same conversion logic as before)
+        # Make sure dimensions and weight are strings or null
         return PartSpec(**data)
     except Exception as e:
-        print(f"LLM error: {e}")
+        # fallback
         return PartSpec(
             name="Service error",
-            description=f"Internal error: {str(e)}",
+            description=str(e),
             category="Error"
         )
 

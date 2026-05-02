@@ -28,8 +28,8 @@ class PartSpec(BaseModel):
     description: str
     category: str
     material: Optional[str] = None
-    weight: Optional[str] = None  # with unit
-    dimensions: Optional[str] = None  # with unit
+    weight: Optional[str] = None
+    dimensions: Optional[str] = None
     tolerance: Optional[str] = None
     finish: Optional[str] = None
     manufacturer: Optional[str] = None
@@ -39,47 +39,56 @@ class PartSpec(BaseModel):
     certifications: Optional[List[str]] = None
 
 async def duckduckgo_search(query: str, max_results: int = 4) -> str:
-    """Search DuckDuckGo and return formatted results."""
-    url = "https://html.duckduckgo.com/html/"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    """Search DuckDuckGo Lite - more stable HTML."""
+    url = "https://lite.duckduckgo.com/lite/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     params = {"q": query}
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
         try:
             resp = await client.get(url, headers=headers, params=params)
             resp.raise_for_status()
         except Exception as e:
-            print(f"Search failed: {e}")
+            print(f"Search request failed: {e}")
             return ""
+
     soup = BeautifulSoup(resp.text, "html.parser")
-    results = soup.select(".result")
+    rows = soup.select("table[class='result'] tr")
+    results = []
+    current = {}
+    for row in rows:
+        if row.get("class") and "result-snippet" in row.get("class"):
+            snippet = row.get_text(strip=True)
+            if current:
+                current["snippet"] = snippet
+                results.append(current)
+                current = {}
+        elif row.get("class") and "result-url" in row.get("class"):
+            link = row.find("a")
+            if link:
+                current["url"] = link.get("href")
+        elif row.get("class") and "result-title" in row.get("class"):
+            title_tag = row.find("a")
+            if title_tag:
+                current["title"] = title_tag.get_text(strip=True)
     output = []
     for r in results[:max_results]:
-        title_tag = r.select_one(".result__a")
-        snippet_tag = r.select_one(".result__snippet")
-        if title_tag:
-            title = title_tag.get_text(strip=True)
-            link = title_tag.get("href")
-            snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
-            output.append(f"Title: {title}\nSnippet: {snippet}\nURL: {link}\n")
+        output.append(f"Title: {r.get('title', '')}\nSnippet: {r.get('snippet', '')}\nURL: {r.get('url', '')}\n")
     return "\n".join(output) if output else ""
 
 async def get_part_specs(query: str) -> PartSpec:
-    # Try primary search
+    # Search
     search_context = await duckduckgo_search(query)
-    if not search_context or len(search_context.strip()) < 50:
-        # Try secondary search with "specifications" or "datasheet"
-        alt_query = f"{query} specifications"
-        search_context = await duckduckgo_search(alt_query)
+    if not search_context or len(search_context.strip()) < 80:
+        search_context = await duckduckgo_search(f"{query} specifications")
     
-    system_prompt = """You are PartSpec. Use the provided search results to answer. Return ONLY valid JSON.
-    Fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications.
-    
-    IMPORTANT INSTRUCTIONS:
-    - If the search results contain dimensions (e.g., "folded: 200x150x20 mm", "unfolded: 250x200x30 mm"), include them as a string in the 'dimensions' field.
-    - For weight, include unit (e.g., "0.5 kg").
-    - If a field cannot be found, use null (not "N/A").
-    - Never invent specifications.
-    - If the part is not found, set name = "Part not found" and description = "No reliable information found." """
+    system_prompt = """You are PartSpec. Use the search results to answer. Return ONLY valid JSON with these fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications.
+    IMPORTANT: 
+    - The 'category' field must be a string, one of: Mechanical, Electrical, Hydraulic, Pneumatic, Fasteners, RawMaterials, Other. If none fits, use "Other".
+    - If any field is unknown, use null (not "N/A").
+    - Never invent specifications. If part not found, set name = "Part not found" and description = "No reliable information found." and category = "Other".
+    """
     
     user_prompt = f"""User query: "{query}"
 Search results:
@@ -97,20 +106,40 @@ Return JSON part specs."""
             temperature=0.2
         )
         data = json.loads(response.choices[0].message.content)
-        # Ensure string fields are strings or null
-        string_fields = ["partNumber", "name", "description", "category", "material", "weight", "dimensions", "tolerance", "finish", "manufacturer", "price", "stockStatus", "datasheetURL"]
+        
+        # ---- Guarantee required fields ----
+        # Category must be a string, default to "Other"
+        if "category" not in data or data["category"] is None or not isinstance(data["category"], str):
+            data["category"] = "Other"
+        
+        # Name and description must be strings (fallback)
+        if "name" not in data or data["name"] is None:
+            data["name"] = "Part not found"
+        if "description" not in data or data["description"] is None:
+            data["description"] = "No description available."
+        
+        # Convert any non-string values to strings for optional fields
+        string_fields = ["partNumber", "material", "weight", "dimensions", "tolerance", "finish", "manufacturer", "price", "stockStatus", "datasheetURL"]
         for field in string_fields:
             if field in data and data[field] is not None and not isinstance(data[field], str):
                 data[field] = str(data[field])
+        
+        # Handle certifications list
         if "certifications" in data and data["certifications"] is not None:
             if not isinstance(data["certifications"], list):
                 data["certifications"] = [str(data["certifications"])]
             else:
                 data["certifications"] = [str(c) for c in data["certifications"]]
+        
         return PartSpec(**data)
     except Exception as e:
         print(f"LLM error: {e}")
-        return PartSpec(name="Service error", description=f"Error: {str(e)}", category="Error")
+        # Return a safe fallback that never causes validation errors
+        return PartSpec(
+            name="Service error",
+            description=f"Internal error: {str(e)}",
+            category="Error"
+        )
 
 @app.get("/health")
 def health():

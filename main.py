@@ -63,7 +63,9 @@ def mock_part(query: str) -> PartSpec:
 
 # ---------- LLM call ----------
 async def get_llm_specs(query: str) -> PartSpec:
-    system = """You are PartSpec, a technical assistant. Return ONLY valid JSON with these fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications. Use null for unknown. Category one of: Mechanical, Electrical, Hydraulic, Pneumatic, Fasteners, RawMaterials, Other."""
+    system = """You are PartSpec, a technical assistant. Return ONLY valid JSON with these fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications. 
+    IMPORTANT: weight, dimensions, and price must be strings (e.g., "0.5 kg", "10 x 5 x 2 cm", "$25.99"). Do not use numbers or objects."""
+    
     try:
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -75,10 +77,28 @@ async def get_llm_specs(query: str) -> PartSpec:
             temperature=0.2
         )
         data = json.loads(response.choices[0].message.content)
+        
+        # Convert any non-string values to strings (safety net)
+        for key in ["weight", "dimensions", "price", "partNumber", "material", "tolerance", "finish", "manufacturer", "stockStatus", "datasheetURL"]:
+            if key in data and data[key] is not None and not isinstance(data[key], str):
+                data[key] = str(data[key])
+        
+        # Convert certifications list if present
+        if "certifications" in data and data["certifications"] is not None:
+            if not isinstance(data["certifications"], list):
+                data["certifications"] = [str(data["certifications"])]
+            else:
+                data["certifications"] = [str(c) for c in data["certifications"]]
+        
         return PartSpec(**data)
     except Exception as e:
         print(f"❌ LLM error: {type(e).__name__}: {e}")
-        return mock_part(query)
+        # Return a fallback that includes the error details (optional)
+        return PartSpec(
+            name=f"Fallback for '{query}'",
+            description=f"Groq error: {str(e)}",
+            category="Error"
+        )
 
 # ---------- API endpoints ----------
 @app.get("/version")

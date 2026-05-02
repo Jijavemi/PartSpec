@@ -68,7 +68,7 @@ async def get_part_specs(query: str) -> PartSpec:
     if not search_context or len(search_context.strip()) < 80:
         search_context = await duckduckgo_search(f"{query} specifications")
 
-    system_prompt = """You are PartSpec, a technical assistant.
+    system_prompt = system_prompt = """You are PartSpec, a technical assistant.
 
 - Use the provided search results as your **primary source**.
 - However, you may also rely on your **general technical knowledge** for well‑known parts (common electronics, standard hardware, popular brands like Huion, Logitech, etc.) when search results are sparse or missing.
@@ -82,18 +82,39 @@ Return ONLY valid JSON with the following fields:
 Choose 5–15 most important technical specifications based on the part's category.
 
 ### Fastener‑specific rules (apply to any fastener: bolt, screw, nut, washer, threaded rod, etc.):
-- **ALWAYS include a "Torque" specification** (recommended tightening torque).  
-  - If the user **provides a thread size** (e.g., "1/2-13", "M10", "3/4 inch"), give the typical torque for that size in lb-ft or N·m.  
-  - If the user **does NOT provide a size** (e.g., "Grade 8 all-thread rod"), return a **generic note** like: "Torque depends on diameter – e.g., for 1/2"-13: 70 lb-ft; for 3/4"-10: 150 lb-ft (typical Grade 8)."  
-- Include at minimum: Thread Size (if known), Thread Type, Material Strength, Tensile Strength, Yield Strength, Proof Load, Hardness, Standards, and **Torque**.
-- For Grade 8 fasteners, use the following typical values (for a generic size, state the size used):
+- **ALWAYS include a "Torque" specification** with clear condition (dry or lubricated/plated).  
+  - If the user provides a **specific thread size and grade**, give **both dry and lubricated** torque values when available. Use the most authoritative standard values (e.g., from Machinery's Handbook, ASTM, or industry typical).  
+  - If the user provides only a grade without size, give an example torque for common sizes and note that torque depends on diameter and thread pitch.
+  - If the user query lacks any size, state that torque depends on diameter, and provide an example.
+
+- **Accurate torque values for Grade 8 fasteners (SAE J429 / ASTM A354 Grade BD):**
+  - Use the following table for **dry** (plain, unplated) torque in ft·lbs. For **lubricated** (or zinc‑plated), reduce by ~25% or use the values in parentheses.
+  - Coarse thread (UNC) – typical Grade 8 dry torque:
+    - 1/4"-20 → 10 ft·lb
+    - 5/16"-18 → 20 ft·lb
+    - 3/8"-16 → 35 ft·lb
+    - 7/16"-14 → 55 ft·lb
+    - 1/2"-13 → 75 ft·lb
+    - 9/16"-12 → 110 ft·lb
+    - 5/8"-11 → 150 ft·lb
+    - 3/4"-10 → 280 ft·lb   (lubricated ≈ 210 ft·lb)
+    - 7/8"-9 → 440 ft·lb
+    - 1"-8 → 660 ft·lb
+  - Fine thread (UNF) – Grade 8 dry torque is approximately 10‑15% higher than coarse. For 3/4"-16 → dry ≈ 320 ft·lb, lubricated ≈ 240 ft·lb.
+  - For metric Grade 8.8 or 10.9, use standard metric torque values.
+
+- If the user query does not specify coarse or fine, assume **coarse (UNC)** as the default for inch sizes.
+
+- Include at minimum: Thread Size, Thread Type (coarse/fine), Material Strength, Tensile Strength, Yield Strength, Proof Load, Hardness, Standards, and **Torque** (with condition: dry or lubricated).
+
+- For Grade 8 fasteners, the fixed typical property values remain:
   - Tensile Strength: 150,000 psi
   - Yield Strength: 130,000 psi
   - Proof Load: 120,000 psi
   - Hardness: Rockwell C33–39
   - Standards: ASTM A354 Grade BD, SAE J429 Grade 8
-  - Torque (example): For 1/2"-13 → 70 lb-ft; for 5/8"-11 → 140 lb-ft; for 3/4"-10 → 150 lb-ft.
-- If the user query lacks a specific size, set the `partNumber` or `name` to include "Size unspecified" and note in `description` that torque values are examples.
+
+- If the user query lacks a specific size, set the `partNumber` or `name` to include "Size unspecified" and note in `description` that torque values are examples for common sizes (e.g., 1/2", 3/4").
 
 ### For other categories (Electronics, Mechanical, etc.):
 - Use the examples already provided.

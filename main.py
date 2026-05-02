@@ -53,11 +53,11 @@ class PartSpec(BaseModel):
     datasheetURL: Optional[str] = None
     certifications: Optional[List[str]] = None
 
-# ---------- Mock fallback ----------
+# ---------- Mock fallback (updated text) ----------
 def mock_part(query: str) -> PartSpec:
     return PartSpec(
-        name=f"Mock for '{query}' (Groq not available)",
-        description="Check Render logs for Groq initialisation error. Verify GROQ_API_KEY is set correctly.",
+        name=f"Mock for '{query}' (Groq not available – check logs)",
+        description="Either GROQ_API_KEY missing or Groq call failed. See Render logs for details.",
         category="Other"
     )
 
@@ -81,6 +81,10 @@ async def get_llm_specs(query: str) -> PartSpec:
         return mock_part(query)
 
 # ---------- API endpoints ----------
+@app.get("/version")
+def version():
+    return {"version": "3.0", "status": "New Groq code deployed"}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}

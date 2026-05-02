@@ -5,7 +5,7 @@ import asyncio
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 from dotenv import load_dotenv
 from groq import Groq
 import httpx
@@ -36,6 +36,7 @@ class PartSpec(BaseModel):
     stockStatus: Optional[str] = None
     datasheetURL: Optional[str] = None
     certifications: Optional[List[str]] = None
+    specifications: Optional[List[Dict[str, str]]] = None   # new dynamic field
 
 # ---------- search using standard DDG HTML ----------
 async def duckduckgo_search(query: str, max_results: int = 4) -> str:
@@ -71,10 +72,21 @@ async def get_part_specs(query: str) -> PartSpec:
 - Use the provided search results as your **primary source**.
 - However, you may also rely on your **general technical knowledge** for well‑known parts (common electronics, standard hardware, popular brands like Huion, Logitech, etc.) when search results are sparse or missing.
 - If a part is completely unknown or the search results contain no relevant information, set name = "Part not found" and description = "No reliable information found."
-- Return ONLY valid JSON with fields: partNumber, name, description, category, material, weight, dimensions, tolerance, finish, manufacturer, price, stockStatus, datasheetURL, certifications.
-- Category must be one of: Mechanical, Electrical, Hydraulic, Pneumatic, Fasteners, RawMaterials, Other. Default "Other".
-- Use null for unknown fields.
-- Never invent specifications for obscure proprietary part numbers (like internal inventory codes)."""
+- Return ONLY valid JSON with the following fields:
+  partNumber, name, description, category, material, weight, dimensions, tolerance, finish,
+  manufacturer, price, stockStatus, datasheetURL, certifications, specifications.
+
+- **specifications** must be a list of objects, each with "key" and "value".  
+  Choose the 5–15 most important technical specifications for the part based on its category.
+  Examples:
+  - Fastener: "Tensile Strength", "Yield Strength", "Proof Load", "Hardness", "Thread Type", "Standards"
+  - Electronics (Raspberry Pi): "Processor", "RAM", "GPU", "Storage", "Networking", "USB Ports", "Video Output", "GPIO", "Power Requirements"
+  - Mechanical part: "Material", "Weight", "Dimensions", "Tolerance", "Finish", "Load Capacity"
+
+- For fields already covered by the fixed fields (material, weight, dimensions, etc.), you may still include them in specifications for completeness, but avoid duplication if possible.
+- Use null for unknown fixed fields.  
+- Never invent specifications for obscure proprietary part numbers.
+- Category must be one of: Mechanical, Electrical, Hydraulic, Pneumatic, Fasteners, RawMaterials, Other. Default "Other"."""
 
     user_prompt = f"""User query: "{query}"
 Search results:
@@ -112,7 +124,33 @@ Return JSON part specs."""
             else:
                 data["certifications"] = [str(c) for c in data["certifications"]]
         
-        return PartSpec(**data)
+        # Parse specifications array
+        specifications = None
+        if "specifications" in data and isinstance(data["specifications"], list):
+            specs_list = []
+            for item in data["specifications"]:
+                if isinstance(item, dict) and "key" in item and "value" in item:
+                    specs_list.append({"key": str(item["key"]), "value": str(item["value"])})
+            if specs_list:
+                specifications = specs_list
+        
+        return PartSpec(
+            partNumber=data.get("partNumber"),
+            name=data["name"],
+            description=data["description"],
+            category=data["category"],
+            material=data.get("material"),
+            weight=data.get("weight"),
+            dimensions=data.get("dimensions"),
+            tolerance=data.get("tolerance"),
+            finish=data.get("finish"),
+            manufacturer=data.get("manufacturer"),
+            price=data.get("price"),
+            stockStatus=data.get("stockStatus"),
+            datasheetURL=data.get("datasheetURL"),
+            certifications=data.get("certifications"),
+            specifications=specifications
+        )
     except Exception as e:
         print(f"LLM error: {e}")
         return PartSpec(

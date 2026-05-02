@@ -5,7 +5,7 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from ddg_search import DDGS
+from duckduckgo_search import DDGS
 from groq import Groq
 
 load_dotenv()

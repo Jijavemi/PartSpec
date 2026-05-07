@@ -4,7 +4,7 @@
 
 ## Project Submission (Final Project)
 
-- **Team members:** Emily Jijavadze (individual)
+- **Team members:** Emily Jijavadze
 - **Platform:** iOS (Xcode 15+, iOS 17+)
 - **Submission date:** May 6, 2026
 
@@ -13,7 +13,7 @@
 - **Instant local lookup** – Predefined parts (e.g., BRK-123, LM358) return specs immediately.
 - **AI-powered web search** – For unknown part numbers or names, PartSpec searches the web and extracts structured data using Groq’s LLM (Llama 3.3 70B) and DuckDuckGo.
 - **Clean spec display** – Part number, description, material, weight, dimensions, manufacturer, price, stock status, certifications, datasheet URL.
-- **Honest “not found”** – No hallucinated data; the app clearly states when a part cannot be found.
+- **Honest “not found”** – No false data; the app clearly states when a part cannot be found.
 - **Native iOS UI** – Built with UIKit and Auto Layout, follows Apple’s Human Interface Guidelines.
 
 ## Tech Stack
@@ -42,30 +42,18 @@
 
 ## Setup for Grader
 
-### 1. Backend – Already Deployed
+### Backend – Already Deployed
 The backend is live at **`https://partspec.onrender.com`**. No local server setup is required – the iOS app is pre‑configured to use this URL.
 
-
-### 2. Local Running - My Github
-If you want to run your own instance:
-```bash
-git clone https://github.com/Jijavemi/PartSpec.git
-cd PartSpec/backend
-python -m venv venv
-source venv/bin/activate                           # or venv\Scripts\activate on Windows
-pip install -r requirements.txt
-# Create .env file with GROQ_API_KEY=your_key
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
 
 ## Testing Examples
 
 ### App Testing:
 Try these sample searches:
-- BRK-123 → web search + LLM
-- LM358 → web search + LLM
-- Huion ST300 → web search + LLM
-- C7CCGH00N72J → returns “Part not found” (no hallucination).
+- BRK-123
+- LM358
+- Huion ST300
+- C7CCGH00N72J -> returns “Part not found”
 
 ### API Testing - Terminal
 Try these sample searches:
